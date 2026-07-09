@@ -62,7 +62,27 @@ jobs:
           pip install -r requirements.txt
 
       - name: Write Google credentials file
-        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_creds.json
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: printf '%s' "$GOOGLE_CREDENTIALS_JSON" > google_creds.json
+
+      - name: Validate Google credentials file
+        run: |
+          python -c "
+          import json, sys
+          try:
+              data = json.load(open('google_creds.json'))
+          except Exception as e:
+              print(f'google_creds.json is not valid JSON: {e}')
+              sys.exit(1)
+          required = ['client_email', 'private_key', 'token_uri']
+          missing = [k for k in required if k not in data]
+          if missing:
+              print(f'google_creds.json is missing fields: {missing}')
+              sys.exit(1)
+          print(f\"Credentials OK for {data['client_email']}\")
+          "
+
 
       - name: Run scraper
         env:
