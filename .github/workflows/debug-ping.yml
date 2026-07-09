@@ -1,0 +1,9 @@
+name: Debug Ping
+on: workflow_dispatch
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "runner is alive"
