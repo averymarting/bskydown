@@ -19,10 +19,23 @@ Environment variables:
     HASHTAG_COUNT               - max hashtags to save per post (default 3)
     DRIVE_FOLDER_NAME           - Google Drive folder name to upload into
     DRIVE_ID                    - (optional) Shared Drive ID, recommended - see README
-    GOOGLE_APPLICATION_CREDENTIALS - path to the service-account JSON key file
+    GOOGLE_APPLICATION_CREDENTIALS - path to the Google OAuth user token JSON file
     GOOGLE_SHEET_ID             - target Google Sheet ID
+
+Google credentials format (GOOGLE_APPLICATION_CREDENTIALS file):
+    This is a USER OAUTH TOKEN JSON (not a service account key), shaped like:
+    {
+        "token": "...",
+        "refresh_token": "...",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "...",
+        "client_secret": "...",
+        "scopes": ["https://www.googleapis.com/auth/drive",
+                    "https://www.googleapis.com/auth/spreadsheets"]
+    }
 """
 
+import json
 import os
 import re
 import sys
@@ -32,7 +45,8 @@ from datetime import datetime
 import requests
 from atproto import Client
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -76,9 +90,27 @@ def fail(msg):
 def get_google_services():
     if not os.path.exists(GOOGLE_CREDS_PATH):
         fail(f"Google credentials file not found at {GOOGLE_CREDS_PATH}")
-    creds = service_account.Credentials.from_service_account_file(
-        GOOGLE_CREDS_PATH, scopes=SCOPES
+
+    with open(GOOGLE_CREDS_PATH) as f:
+        info = json.load(f)
+
+    creds = Credentials(
+        token=info.get("token"),
+        refresh_token=info.get("refresh_token"),
+        token_uri=info.get("token_uri"),
+        client_id=info.get("client_id"),
+        client_secret=info.get("client_secret"),
+        scopes=info.get("scopes", SCOPES),
     )
+
+    # Refresh if expired (or if no access token was stored, just a refresh_token)
+    if not creds.valid:
+        if creds.refresh_token:
+            creds.refresh(Request())
+            log("🔄 Refreshed Google OAuth access token")
+        else:
+            fail("Google credentials are invalid/expired and no refresh_token is present")
+
     drive_service = build("drive", "v3", credentials=creds)
     sheets_service = build("sheets", "v4", credentials=creds)
     return drive_service, sheets_service
