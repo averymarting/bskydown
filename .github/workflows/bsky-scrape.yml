@@ -1,5 +1,4 @@
 name: Bluesky
-
 on:
   workflow_dispatch:
     inputs:
@@ -44,9 +43,14 @@ on:
         default: ""
         type: string
 
+concurrency:
+  group: bsky-scrape
+  cancel-in-progress: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -75,14 +79,13 @@ jobs:
           except Exception as e:
               print(f'google_creds.json is not valid JSON: {e}')
               sys.exit(1)
-          required = ['client_email', 'private_key', 'token_uri']
+          required = ['token', 'refresh_token', 'client_id', 'client_secret', 'token_uri']
           missing = [k for k in required if k not in data]
           if missing:
               print(f'google_creds.json is missing fields: {missing}')
               sys.exit(1)
-          print(f\"Credentials OK for {data['client_email']}\")
+          print('OAuth token credentials OK')
           "
-
 
       - name: Run scraper
         env:
