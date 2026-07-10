@@ -54,15 +54,28 @@ from googleapiclient.http import MediaFileUpload
 # ---------------------------------------------------------------------------
 # Config from environment
 # ---------------------------------------------------------------------------
-BSKY_HANDLE = os.environ.get("BSKY_HANDLE", "").strip()
+_INVISIBLE_CHARS_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+
+
+def clean_str(value):
+    """Strip invisible/zero-width/bidi-control unicode characters that can
+    silently sneak into copy-pasted text (e.g. from social apps or messaging
+    clients) and break exact-match API lookups like Bluesky handles, even
+    though the text looks completely normal to the eye."""
+    if value is None:
+        return ""
+    return _INVISIBLE_CHARS_RE.sub("", value).strip()
+
+
+BSKY_HANDLE = clean_str(os.environ.get("BSKY_HANDLE", ""))
 BSKY_APP_PASSWORD = os.environ.get("BSKY_APP_PASSWORD", "").strip()
-TARGET_USERNAME = os.environ.get("TARGET_USERNAME", "").strip()
+TARGET_USERNAME = clean_str(os.environ.get("TARGET_USERNAME", ""))
 MODE = os.environ.get("MODE", "timeline").strip().lower()
 CONTENT_TYPE = os.environ.get("CONTENT_TYPE", "both").strip().lower()
 MAX_POSTS = int(os.environ.get("MAX_POSTS", "100") or 100)
 HASHTAG_COUNT = int(os.environ.get("HASHTAG_COUNT", "3") or 3)
-DRIVE_FOLDER_NAME = os.environ.get("DRIVE_FOLDER_NAME", "").strip()
-DRIVE_ID = os.environ.get("DRIVE_ID", "").strip() or None
+DRIVE_FOLDER_NAME = clean_str(os.environ.get("DRIVE_FOLDER_NAME", ""))
+DRIVE_ID = clean_str(os.environ.get("DRIVE_ID", "")) or None
 GOOGLE_CREDS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "google_creds.json")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 
@@ -372,6 +385,8 @@ def main():
             break
 
         if not resp.feed:
+            log(f"ℹ️ No more posts available from '{TARGET_USERNAME}' - stopping "
+                f"(scanned {scanned} of requested {MAX_POSTS}).")
             break
 
         for item in resp.feed:
@@ -439,6 +454,8 @@ def main():
 
         cursor = getattr(resp, "cursor", None)
         if not cursor:
+            log(f"ℹ️ Reached the end of '{TARGET_USERNAME}' feed - stopping "
+                f"(scanned {scanned} of requested {MAX_POSTS}).")
             break
         time.sleep(0.5)
 
