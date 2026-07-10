@@ -38,6 +38,7 @@ Google credentials format (GOOGLE_APPLICATION_CREDENTIALS file):
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -191,25 +192,34 @@ def append_sheet_row(sheets_service, sheet_id, sheet_title, row):
 # ---------------------------------------------------------------------------
 # Bluesky helpers
 # ---------------------------------------------------------------------------
-def get_video_cid_and_did(post_view):
+def get_video_playlist_url(post_view):
+    """Bluesky videos are served as HLS streams (m3u8 playlist + segments),
+    not as a single downloadable file. The embed view exposes a 'playlist'
+    field with the .m3u8 URL - that's what we need, not a CDN image-style URL."""
     try:
         embed = getattr(post_view, "embed", None)
         if not embed:
-            return None, None
-        did = getattr(post_view.author, "did", None)
-        embed_type = getattr(embed, "$type", "") or getattr(embed, "py_type", "") or str(type(embed))
-        if "app.bsky.embed.video#view" in embed_type or "video" in embed_type.lower():
-            cid = getattr(embed, "cid", None)
-            if cid:
-                return str(cid), did
-        if hasattr(embed, "video") and hasattr(embed.video, "ref"):
-            ref = embed.video.ref
-            cid = getattr(ref, "$link", None) or (ref.get("$link") if isinstance(ref, dict) else None)
-            if cid:
-                return str(cid), did
+            return None
+
+        # Direct video embed - check the attribute directly rather than
+        # gating on a type-string match, since attribute naming for the
+        # $type discriminator varies across atproto SDK versions/response
+        # shapes and silently breaking this check was the root cause of
+        # videos failing to download before.
+        playlist = getattr(embed, "playlist", None)
+        if playlist:
+            return str(playlist)
+
+        # RecordWithMedia (e.g. quote post with an attached video) nests
+        # the video embed under .media
+        media = getattr(embed, "media", None)
+        if media:
+            playlist = getattr(media, "playlist", None)
+            if playlist:
+                return str(playlist)
     except Exception:
         pass
-    return None, None
+    return None
 
 
 def get_image_urls(post_view):
@@ -252,21 +262,36 @@ def download_binary(url, filepath, timeout=30):
     return False
 
 
-def download_video(client, did, cid, filepath):
-    if not did or not cid:
+def download_video(playlist_url, filepath, timeout=120):
+    """Download an HLS (.m3u8) video stream and remux it into a single .mp4
+    using ffmpeg (preinstalled on GitHub's ubuntu-latest runners)."""
+    if not playlist_url:
         return False
-    cdn_url = f"https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}"
-    if download_binary(cdn_url, filepath, timeout=45):
-        if os.path.getsize(filepath) > 10000:
-            return True
-        os.remove(filepath)
     try:
-        blob_data = client.com.atproto.sync.get_blob(params={"did": did, "cid": cid})
-        with open(filepath, "wb") as f:
-            f.write(blob_data)
-        return True
-    except Exception:
-        pass
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-loglevel", "error",
+                "-i", playlist_url,
+                "-c", "copy",
+                filepath,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0 and os.path.exists(filepath) and os.path.getsize(filepath) > 10000:
+            return True
+        if result.stderr:
+            log(f"  ffmpeg error: {result.stderr.strip()[-300:]}")
+    except subprocess.TimeoutExpired:
+        log("  ffmpeg timed out downloading video")
+    except FileNotFoundError:
+        fail("ffmpeg is not installed on this runner - required to download HLS videos")
+    except Exception as e:
+        log(f"  ffmpeg exception: {e}")
+    if os.path.exists(filepath):
+        os.remove(filepath)
     return False
 
 
@@ -373,12 +398,12 @@ def main():
             saved_files = []
 
             if CONTENT_TYPE in ("videos", "both"):
-                cid, did = get_video_cid_and_did(post_view)
-                if cid:
+                playlist_url = get_video_playlist_url(post_view)
+                if playlist_url:
                     fname = f"{safe_name}.mp4"
                     fpath = os.path.join(DOWNLOAD_DIR, fname)
                     log(f"⬇️ Downloading video: {text[:50]}...")
-                    if download_video(client, did, cid, fpath):
+                    if download_video(playlist_url, fpath):
                         saved_files.append(("video", fpath))
                     else:
                         log(f"  ❌ Failed to download video for post {safe_name}")
